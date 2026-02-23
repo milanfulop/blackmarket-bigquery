@@ -1,0 +1,38 @@
+config {
+  type: "table",
+  schema: "facts",
+  description: "Fraud flags fact table",
+  assertions: {
+    nonNull: ["flag_id", "entity_type", "entity_id", "flag_reason", "flagged_at"],
+    uniqueKey: ["flag_id"]
+  },
+  columns: {
+    flag_id:      { description: "Primary key" },
+    entity_type:  { description: "user / order / listing" },
+    entity_id:    { description: "ID of the flagged entity" },
+    flag_reason:  { description: "Reason for the flag" },
+    flagged_at:   { description: "When the flag was raised" },
+    resolved_flag:{ description: "True if flag was resolved" },
+    is_resolved:  { description: "Convenience boolean for resolved_flag" },
+    days_open:    { description: "Days flag has been open, null if resolved" }
+  }
+}
+
+SELECT
+  CAST(flag_id       AS STRING)    AS flag_id,
+  CAST(entity_type   AS STRING)    AS entity_type,
+  CAST(entity_id     AS STRING)    AS entity_id,
+  CAST(flag_reason   AS STRING)    AS flag_reason,
+  CAST(flagged_at    AS TIMESTAMP) AS flagged_at,
+  CAST(resolved_flag AS BOOL)      AS resolved_flag,
+
+  -- convenience
+  resolved_flag = true             AS is_resolved,
+
+  -- how long has this flag been open
+  CASE
+    WHEN resolved_flag = true THEN NULL
+    ELSE DATE_DIFF(CURRENT_DATE(), CAST(flagged_at AS DATE), DAY)
+  END                              AS days_open
+
+FROM ${ref("raw_oltp", "fraud_flags")}

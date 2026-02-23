@@ -1,0 +1,54 @@
+config {
+  type: "table",
+  schema: "facts",
+  description: "Escrows fact table",
+  assertions: {
+    nonNull: ["escrow_id", "order_id", "held_amount", "release_status", "held_at"],
+    uniqueKey: ["escrow_id"]
+  },
+  columns: {
+    escrow_id:          { description: "Primary key" },
+    order_id:           { description: "Foreign key to fct_orders" },
+    held_amount:        { description: "Amount held in escrow in original currency" },
+    usd_amount:         { description: "Held amount normalized to USD" },
+    release_status:     { description: "held / released / refunded" },
+    held_at:            { description: "When escrow was created" },
+    released_at:        { description: "When escrow was released or refunded, nullable" },
+    is_released:        { description: "True if release_status is released" },
+    is_refunded:        { description: "True if release_status is refunded" },
+    is_stuck:           { description: "True if held for more than 120 days with no release" },
+    days_held:          { description: "Days between held_at and released_at or today if still held" }
+  }
+}
+
+SELECT
+  CAST(escrow_id      AS STRING)    AS escrow_id,
+  CAST(order_id       AS INT64)     AS order_id,
+  CAST(held_amount    AS FLOAT64)   AS held_amount,
+
+  -- no currency column on escrows, inherited from order
+  -- usd_amount approximated assuming USD for now
+  CAST(held_amount    AS FLOAT64)   AS usd_amount,
+
+  CAST(release_status AS STRING)    AS release_status,
+  CAST(held_at        AS TIMESTAMP) AS held_at,
+  CAST(released_at    AS TIMESTAMP) AS released_at,   -- nullable
+
+  -- convenience flags
+  release_status = 'released'                         AS is_released,
+  release_status = 'refunded'                         AS is_refunded,
+
+  -- stuck = still held after 120 days (key fraud signal)
+  (
+    release_status = 'held'
+    AND DATE_DIFF(CURRENT_DATE(), CAST(held_at AS DATE), DAY) > 120
+  )                                                   AS is_stuck,
+
+  -- days held: until release if resolved, until today if still held
+  DATE_DIFF(
+    COALESCE(CAST(released_at AS DATE), CURRENT_DATE()),
+    CAST(held_at AS DATE),
+    DAY
+  )                                                   AS days_held
+
+FROM ${ref("raw_oltp", "escrows")}

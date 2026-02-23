@@ -1,0 +1,50 @@
+config {
+  type: "table",
+  schema: "dimensions",
+  description: "Date dimension table"
+}
+
+WITH date_spine AS (
+  SELECT date
+  FROM UNNEST(
+    GENERATE_DATE_ARRAY('2022-01-01', CURRENT_DATE(), INTERVAL 1 DAY)
+  ) AS date
+)
+
+SELECT
+  -- keys
+  FORMAT_DATE('%Y%m%d', date)       AS date_id,           -- surrogate key e.g. 20240101
+  date                              AS full_date,
+
+  -- year / quarter / month
+  EXTRACT(YEAR FROM date)           AS year,
+  EXTRACT(QUARTER FROM date)        AS quarter,
+  CONCAT('Q', EXTRACT(QUARTER FROM date), ' ', EXTRACT(YEAR FROM date)) AS quarter_label, -- Q1 2024
+  EXTRACT(MONTH FROM date)          AS month,
+  FORMAT_DATE('%B', date)           AS month_name,         -- January, February...
+  FORMAT_DATE('%b', date)           AS month_short,        -- Jan, Feb...
+  CONCAT(CAST(EXTRACT(YEAR FROM date) AS STRING), '-', FORMAT_DATE('%m', date)) AS year_month, -- 2024-01
+
+  -- week
+  EXTRACT(WEEK FROM date)           AS week_of_year,
+  EXTRACT(ISOWEEK FROM date)        AS iso_week,
+
+  -- day
+  EXTRACT(DAY FROM date)            AS day,
+  EXTRACT(DAYOFWEEK FROM date)      AS day_of_week,        -- 1=Sunday, 7=Saturday
+  FORMAT_DATE('%A', date)           AS day_name,           -- Monday, Tuesday...
+  FORMAT_DATE('%a', date)           AS day_short,          -- Mon, Tue...
+  EXTRACT(DAYOFYEAR FROM date)      AS day_of_year,
+
+  -- flags
+  IF(EXTRACT(DAYOFWEEK FROM date) IN (1, 7), true, false)  AS is_weekend,
+  IF(EXTRACT(DAYOFWEEK FROM date) IN (1, 7), false, true)  AS is_weekday,
+  IF(EXTRACT(DAY FROM date) = 1, true, false)              AS is_month_start,
+  IF(date = LAST_DAY(date, MONTH), true, false)            AS is_month_end,
+  IF(EXTRACT(DAY FROM date) = 1 AND EXTRACT(MONTH FROM date) = 1, true, false) AS is_year_start,
+
+  -- relative (useful for filtering "last 30 days" etc)
+  DATE_DIFF(CURRENT_DATE(), date, DAY)    AS days_ago,
+  DATE_DIFF(CURRENT_DATE(), date, MONTH)  AS months_ago
+
+FROM date_spine

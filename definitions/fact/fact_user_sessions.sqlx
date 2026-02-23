@@ -1,0 +1,39 @@
+config {
+  type: "table",
+  schema: "facts",
+  description: "User sessions fact table",
+  assertions: {
+    nonNull: ["session_id", "user_id", "ip_address", "device_type", "login_at"],
+    uniqueKey: ["session_id"]
+  },
+  columns: {
+    session_id:        { description: "Primary key" },
+    user_id:           { description: "Foreign key to dim_user" },
+    ip_address:        { description: "IP address of the session" },
+    device_type:       { description: "mobile / desktop / tablet" },
+    login_at:          { description: "Session start timestamp" },
+    logout_at:         { description: "Session end timestamp, nullable" },
+    session_duration_minutes: { description: "Duration in minutes, null if no logout" },
+    is_active:         { description: "True if no logout recorded" }
+  }
+}
+
+SELECT
+  CAST(session_id   AS STRING)    AS session_id,
+  CAST(user_id      AS INT64)     AS user_id,
+  CAST(ip_address   AS STRING)    AS ip_address,
+  CAST(device_type  AS STRING)    AS device_type,
+  CAST(login_at     AS TIMESTAMP) AS login_at,
+  CAST(logout_at    AS TIMESTAMP) AS logout_at,       -- nullable
+
+  -- session duration
+  TIMESTAMP_DIFF(
+    CAST(logout_at AS TIMESTAMP),
+    CAST(login_at  AS TIMESTAMP),
+    MINUTE
+  )                               AS session_duration_minutes,  -- null if no logout
+
+  -- still active
+  logout_at IS NULL               AS is_active
+
+FROM ${ref("raw_oltp", "user_sessions")}

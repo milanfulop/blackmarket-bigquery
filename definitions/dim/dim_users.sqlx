@@ -1,0 +1,35 @@
+config {
+  type: "table",
+  schema: "dimensions",
+  description: "User dimension table",
+  assertions: {
+    nonNull: ["user_id", "username", "role", "created_at", "status"],
+    uniqueKey: ["user_id"]
+  },
+  columns: {
+    user_id:    { description: "Primary key" },
+    username:   { description: "Username, non nullable" },
+    email:      { description: "Email, nullable" },
+    role:       { description: "buyer / vendor / dual" },
+    created_at: { description: "Foreign key to dim_date" },
+    status:     { description: "active / suspended / banned" },
+    is_vendor:  { description: "True if role is vendor or dual" },
+    is_buyer:   { description: "True if role is buyer or dual" },
+    is_banned:  { description: "True if status is banned" },
+  }
+}
+
+SELECT
+  CAST(user_id   AS INT64)  AS user_id,
+  CAST(username  AS STRING) AS username,
+  CAST(email     AS STRING) AS email,
+  CAST(role      AS STRING) AS role,
+  CAST(created_at AS DATE)  AS created_at,
+  CAST(status    AS STRING) AS status,
+
+  -- convenience flags (saves repeating CASE logic downstream)
+  role IN ('vendor', 'dual')  AS is_vendor,
+  role IN ('buyer', 'dual')   AS is_buyer,
+  status = 'banned'           AS is_banned,
+
+FROM ${ref("raw_oltp", "users")}
