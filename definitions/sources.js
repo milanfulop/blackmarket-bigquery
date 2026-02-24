@@ -27,3 +27,13 @@ declare({
   schema: "raw_oltp",
   name: "fraud_flags"
 })
+
+declare({
+  schema: "raw_oltp",
+  name: "risk_scores"
+})
+
+declare({
+  schema: "raw_oltp",
+  name: "reputation_snapshots"
+})

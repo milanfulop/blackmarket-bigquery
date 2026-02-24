@@ -1,0 +1,31 @@
+config {
+  type: "table",
+  schema: "time_series",
+  description: "Risk scores time series table",
+  assertions: {
+    nonNull: ["risk_id", "user_id", "risk_score", "risk_level", "calculated_at"],
+    uniqueKey: ["risk_id"]
+  },
+  columns: {
+    risk_id:       { description: "Primary key" },
+    user_id:       { description: "Foreign key to dim_user" },
+    risk_score:    { description: "Risk score between 0 and 1" },
+    risk_level:    { description: "low / medium / high" },
+    calculated_at: { description: "When this score was calculated" },
+    is_most_recent:{ description: "True if this is the latest score for this user" }
+  }
+}
+
+SELECT
+  CAST(risk_id      AS STRING)    AS risk_id,
+  CAST(user_id      AS INT64)     AS user_id,
+  CAST(risk_score   AS FLOAT64)   AS risk_score,
+  CAST(risk_level   AS STRING)    AS risk_level,
+  CAST(calculated_at AS TIMESTAMP) AS calculated_at,
+
+  ROW_NUMBER() OVER (
+    PARTITION BY user_id
+    ORDER BY calculated_at DESC
+  ) = 1                           AS is_most_recent
+
+FROM ${ref("raw_oltp", "risk_scores")}
