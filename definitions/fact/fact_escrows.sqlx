@@ -18,7 +18,7 @@ config {
     is_refunded:        { description: "True if release_status is refunded" },
     is_stuck:           { description: "True if held for more than 120 days with no release" },
     days_held:          { description: "Days between held_at and released_at or today if still held" }
-  }
+  },
 }
 
 SELECT

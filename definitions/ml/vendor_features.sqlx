@@ -1,0 +1,158 @@
+config {
+  type: "table",
+  schema: "ml",
+  description: "Vendor feature table for exit scam detection. One row per vendor."
+}
+
+WITH
+
+-- all orders where user is vendor
+vendor_orders AS (
+  SELECT
+    o.vendor_id                                                     AS user_id,
+    COUNT(o.order_id)                                               AS total_orders,
+    COUNTIF(o.order_status IN ('pending', 'disputed'))              AS total_incomplete_orders,
+    ROUND(
+      COUNTIF(o.order_status IN ('pending', 'disputed')) / COUNT(o.order_id),
+    4)                                                              AS pct_incomplete_orders,
+    SUM(
+      CASE
+        WHEN o.currency = 'USD' THEN o.total_amount
+        WHEN o.currency = 'BTC' THEN o.total_amount * 40000
+        WHEN o.currency = 'ETH' THEN o.total_amount * 2000
+        ELSE o.total_amount
+      END
+    )                                                               AS total_revenue_usd
+  FROM ${ref("facts", "fact_orders")} o
+  GROUP BY o.vendor_id
+),
+
+-- payments on vendor's orders
+vendor_payments AS (
+  SELECT
+    o.vendor_id                                                     AS user_id,
+    ROUND(
+      AVG(
+        CASE
+          WHEN p.currency = 'USD' THEN p.amount
+          WHEN p.currency = 'BTC' THEN p.amount * 40000
+          WHEN p.currency = 'ETH' THEN p.amount * 2000
+          ELSE p.amount
+        END
+      ),
+    2)                                                              AS avg_order_value_usd,
+    ROUND(
+      COUNTIF(p.payment_method = 'crypto') / COUNT(p.payment_id),
+    4)                                                              AS pct_crypto_payments
+  FROM ${ref("facts", "fact_payments")} p
+  JOIN ${ref("facts", "fact_orders")} o ON p.order_id = o.order_id
+  GROUP BY o.vendor_id
+),
+
+-- fraud flags on vendor's orders where reason is buyer_claimed_not_received
+vendor_flags AS (
+  SELECT
+    o.vendor_id                                                     AS user_id,
+    COUNT(ff.flag_id)                                               AS not_received_flag_count
+  FROM ${ref("facts", "fact_fraud_flags")} ff
+  JOIN ${ref("facts", "fact_orders")} o ON CAST(ff.entity_id AS INT64) = o.order_id
+  WHERE ff.entity_type = 'order'
+    AND ff.flag_reason = 'buyer_claimed_not_received'
+  GROUP BY o.vendor_id
+),
+
+-- latest and 2nd latest reputation snapshot per vendor
+rep_ranked AS (
+  SELECT
+    user_id,
+    avg_rating,
+    total_reviews,
+    calculated_at,
+    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY calculated_at DESC) AS rn
+  FROM ${ref("time_series", "time_series_reputation_snapshots")}
+),
+
+vendor_reputation AS (
+  SELECT
+    user_id,
+    -- avg of latest and 2nd latest
+    AVG(CASE WHEN rn IN (1, 2) THEN avg_rating END)                 AS avg_rating,
+    MAX(CASE WHEN rn = 1 THEN total_reviews END)                    AS total_reviews,
+    -- trajectory: avg(latest, 2nd latest) - earliest
+    AVG(CASE WHEN rn IN (1, 2) THEN avg_rating END)
+      - MIN(avg_rating)                                             AS rating_trajectory
+  FROM rep_ranked
+  GROUP BY user_id
+),
+
+-- latest and 2nd latest risk score per vendor
+risk_ranked AS (
+  SELECT
+    user_id,
+    risk_score,
+    calculated_at,
+    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY calculated_at DESC) AS rn
+  FROM ${ref("time_series", "time_series_risk_scores")}
+),
+
+vendor_risk AS (
+  SELECT
+    user_id,
+    AVG(risk_score)                                                 AS avg_risk_score,
+    -- trajectory: avg(latest, 2nd latest) - earliest
+    AVG(CASE WHEN rn IN (1, 2) THEN risk_score END)
+      - MIN(risk_score)                                             AS risk_score_trajectory
+  FROM risk_ranked
+  GROUP BY user_id
+),
+
+-- distinct IPs per vendor from sessions
+vendor_sessions AS (
+  SELECT
+    user_id,
+    COUNT(DISTINCT ip_address)                                      AS distinct_ip_logins
+  FROM ${ref("facts", "fact_user_sessions")}
+  GROUP BY user_id
+)
+
+-- final join — one row per vendor
+SELECT
+  u.user_id,
+
+  -- orders
+  COALESCE(vo.total_orders, 0)              AS total_orders,
+  COALESCE(vo.total_incomplete_orders, 0)   AS total_incomplete_orders,
+  COALESCE(vo.pct_incomplete_orders, 0)     AS pct_incomplete_orders,
+  COALESCE(vo.total_revenue_usd, 0)         AS total_revenue_usd,
+
+  -- payments
+  COALESCE(vp.avg_order_value_usd, 0)       AS avg_order_value_usd,
+  COALESCE(vp.pct_crypto_payments, 0)       AS pct_crypto_payments,
+
+  -- fraud flags
+  COALESCE(vf.not_received_flag_count, 0)   AS not_received_flag_count,
+
+  -- reputation
+  vr.avg_rating,
+  vr.total_reviews,
+  vr.rating_trajectory,
+
+  -- risk
+  vrk.avg_risk_score,
+  vrk.risk_score_trajectory,
+
+  -- sessions
+  COALESCE(vs.distinct_ip_logins, 0)        AS distinct_ip_logins,
+
+  -- label
+  CASE WHEN u.status = 'banned' THEN 1 ELSE 0 END AS is_exit_scammer
+
+FROM ${ref("dimensions", "dim_users")} u
+LEFT JOIN vendor_orders     vo  ON u.user_id = vo.user_id
+LEFT JOIN vendor_payments   vp  ON u.user_id = vp.user_id
+LEFT JOIN vendor_flags      vf  ON u.user_id = vf.user_id
+LEFT JOIN vendor_reputation vr  ON u.user_id = vr.user_id
+LEFT JOIN vendor_risk       vrk ON u.user_id = vrk.user_id
+LEFT JOIN vendor_sessions   vs  ON u.user_id = vs.user_id
+
+WHERE u.is_vendor = true
