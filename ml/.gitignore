@@ -1,2 +1,7 @@
 venv
 .env
+
+model.pkl
+cache/
+
+test-data

@@ -6,7 +6,12 @@ Trains and compares:
   - Logistic Regression
 
 Uses mart_vendor_features from BigQuery.
+Caches data locally as CSV so BigQuery is only hit once.
 75% training / 25% validation split.
+
+Usage:
+  python train.py            <- loads from cache if exists, BQ otherwise
+  python train.py --refresh  <- force re-fetch from BQ
 """
 
 from google.cloud import bigquery
@@ -23,14 +28,19 @@ from sklearn.metrics import (
 )
 from sklearn.preprocessing import StandardScaler
 import pickle
+import os
+import sys
 import warnings
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
-PROJECT_ID = "blackmarket-488113"
-TABLE      = f"{PROJECT_ID}.ml.vendor_features"
+PROJECT_ID    = "blackmarket-488113"
+TABLE         = f"{PROJECT_ID}.ml.vendor_features"
+CACHE_PATH    = "./cache/vendor_features_cache.csv"
+MODEL_PATH    = "./model.pkl"
+FORCE_REFRESH = "--refresh" in sys.argv
 
 FEATURES = [
     "total_orders",
@@ -50,25 +60,33 @@ FEATURES = [
 LABEL = "is_exit_scammer"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. LOAD DATA
+# 1. LOAD DATA (local cache or BigQuery)
 # ─────────────────────────────────────────────────────────────────────────────
-print("Loading data from BigQuery...")
-client = bigquery.Client(project=PROJECT_ID)
-df = client.query(f"SELECT * FROM `{TABLE}`").to_dataframe()
+os.makedirs("./cache", exist_ok=True)
+
+if not FORCE_REFRESH and os.path.exists(CACHE_PATH):
+    print(f"Loading data from local cache ({CACHE_PATH})...")
+    print("  (run with --refresh to re-fetch from BigQuery)")
+    df = pd.read_csv(CACHE_PATH)
+else:
+    print("Loading data from BigQuery...")
+    client = bigquery.Client(project=PROJECT_ID)
+    df = client.query(f"SELECT * FROM `{TABLE}`").to_dataframe()
+    df.to_csv(CACHE_PATH, index=False)
+    print(f"  Cached locally to {CACHE_PATH}")
+
 print(f"  {len(df):,} vendors loaded")
 print(f"  Exit scammers: {df[LABEL].sum():,} ({df[LABEL].mean()*100:.1f}%)\n")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. PREPARE
 # ─────────────────────────────────────────────────────────────────────────────
-# drop rows where any feature is null
 df = df.dropna(subset=FEATURES + [LABEL])
 print(f"  After dropping nulls: {len(df):,} vendors\n")
 
 X = df[FEATURES]
 y = df[LABEL]
 
-# 75/25 split, stratified so both sets have same scammer ratio
 X_train, X_val, y_train, y_val = train_test_split(
     X, y,
     test_size=0.25,
@@ -78,7 +96,6 @@ X_train, X_val, y_train, y_val = train_test_split(
 print(f"Training set:   {len(X_train):,} vendors")
 print(f"Validation set: {len(X_val):,} vendors\n")
 
-# scale for logistic regression (trees don't need it but doesn't hurt)
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
 X_val_scaled   = scaler.transform(X_val)
@@ -86,7 +103,7 @@ X_val_scaled   = scaler.transform(X_val)
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPER
 # ─────────────────────────────────────────────────────────────────────────────
-def evaluate(name, model, X_t, y_t, X_v, y_v, scaled=False):
+def evaluate(name, model, X_t, y_t, X_v, y_v):
     model.fit(X_t, y_t)
     preds = model.predict(X_v)
     proba = model.predict_proba(X_v)[:, 1] if hasattr(model, "predict_proba") else None
@@ -166,7 +183,99 @@ lr = evaluate(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. FEATURE IMPORTANCE (best random forest)
+# 6. XGBOOST
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n══════════════════════════════════════════")
+print("  XGBOOST")
+print("══════════════════════════════════════════\n")
+
+from xgboost import XGBClassifier
+
+scale = len(y_train[y_train==0]) / len(y_train[y_train==1])
+
+xgb = evaluate(
+    "XGBoost",
+    XGBClassifier(
+        scale_pos_weight=scale,
+        n_estimators=100,
+        max_depth=5,
+        random_state=42,
+        verbosity=0
+    ),
+    X_train, y_train, X_val, y_val
+)# ─────────────────────────────────────────────────────────────────────────────
+# 6. XGBOOST
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n══════════════════════════════════════════")
+print("  XGBOOST")
+print("══════════════════════════════════════════\n")
+
+from xgboost import XGBClassifier
+
+scale = len(y_train[y_train==0]) / len(y_train[y_train==1])
+
+xgb = evaluate(
+    "XGBoost",
+    XGBClassifier(
+        scale_pos_weight=scale,
+        n_estimators=100,
+        max_depth=5,
+        random_state=42,
+        verbosity=0
+    ),
+    X_train, y_train, X_val, y_val
+)# ─────────────────────────────────────────────────────────────────────────────
+# 6. XGBOOST
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n══════════════════════════════════════════")
+print("  XGBOOST")
+print("══════════════════════════════════════════\n")
+
+from xgboost import XGBClassifier
+
+scale = len(y_train[y_train==0]) / len(y_train[y_train==1])
+
+xgb = evaluate(
+    "XGBoost",
+    XGBClassifier(
+        scale_pos_weight=scale,
+        n_estimators=100,
+        max_depth=5,
+        random_state=42,
+        verbosity=0
+    ),
+    X_train, y_train, X_val, y_val
+)# ─────────────────────────────────────────────────────────────────────────────
+# 6. XGBOOST
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n══════════════════════════════════════════")
+print("  XGBOOST")
+print("══════════════════════════════════════════\n")
+
+from xgboost import XGBClassifier
+
+scale = len(y_train[y_train==0]) / len(y_train[y_train==1])
+
+xgb = evaluate(
+    "XGBoost",
+    XGBClassifier(
+        scale_pos_weight=scale,
+        n_estimators=100,
+        max_depth=5,
+        random_state=42,
+        verbosity=0
+    ),
+    X_train, y_train, X_val, y_val
+)
+
+xgb_auc = roc_auc_score(y_val, xgb.predict_proba(X_val)[:, 1])
+if xgb_auc > best_rf_auc:
+    best_rf      = xgb
+    best_rf_auc  = xgb_auc
+    best_rf_name = "XGBoost"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. FEATURE IMPORTANCE (best random forest)
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n══════════════════════════════════════════")
 print("  FEATURE IMPORTANCE (Best Random Forest)")
@@ -180,9 +289,9 @@ for feat, score in importances.items():
     print(f"  {feat:<35} {score:.4f}  {bar}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. SAVE BEST MODEL
+# 8. SAVE BEST MODEL
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nSaving best random forest model...")
-with open("./ml/model.pkl", "wb") as f:
+print(f"\nSaving best model to {MODEL_PATH}...")
+with open(MODEL_PATH, "wb") as f:
     pickle.dump({"model": best_rf, "scaler": scaler, "features": FEATURES}, f)
-print("  Saved to model.pkl")
+print("  Done.")
