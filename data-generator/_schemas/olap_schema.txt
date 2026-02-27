@@ -1,0 +1,68 @@
+reputation_snapshots (time series)
+- snapshot_id
+- user_id
+- avg_rating
+- total_reviews
+- calculated_at
+
+risk_scores (time series)
+- risk_id
+- user_id
+- risk_score
+- risk_level
+- calculated_at
+
+fraud_flags (fact)
+- flag_id
+- entity_type
+- entity_id
+- flag_reason
+- flagged_at
+- resolved_flag
+
+orders
+- order_id
+- buyer_id
+- vendor_id
+- order_status
+- total_amount
+- currency
+- created_at
+- completed_at
+
+payments
+- payment_id
+- order_id
+- buyer_id
+- amount
+- currency
+- usd_amount
+- payment_method
+- created_at
+- confirmed_at
+
+escrows
+- escrow_id
+- order_id
+- held_amount
+- release_status
+- held_at
+- released_at
+
+user_sessions
+- session_id
+- user_id
+- ip_address
+- device_type
+- login_at
+- logout_at
+
+users (dim)
+- user_id
+- username
+- email
+- role
+- created_at
+- status
+
+date_dim

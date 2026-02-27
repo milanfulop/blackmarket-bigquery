@@ -1,0 +1,373 @@
+🧍 1️⃣ USERS
+------------------------------------------------------------
+Table: users
+
+What it represents:
+Every account on the platform — buyer, vendor, or both.
+
+Why it exists:
+Central identity anchor. Almost every table references user_id.
+
+Important columns:
+- user_id (PK)
+- role → buyer / vendor / dual
+- status → active / suspended / banned
+- created_at
+
+Stories it enables:
+- Vendor gets banned after fraud spike
+- High-risk users over time
+- New users behave differently than old users
+
+
+📱 2️⃣ USER_SESSIONS
+------------------------------------------------------------
+Table: user_sessions
+
+What it represents:
+Login activity. Each row = one session.
+
+Why it exists:
+Behavior analysis. Fraud detection. Geo anomalies.
+
+Columns:
+- session_id (PK)
+- user_id (FK → users.user_id)
+- ip_address
+- device_type
+- login_at
+- logout_at
+
+Stories:
+- Bots logging in 200 times a day
+- One user logging in from 5 countries in 24h
+- Session duration patterns
+
+
+🗂 3️⃣ CATEGORIES
+------------------------------------------------------------
+Table: categories
+
+What it represents:
+Product hierarchy.
+
+Columns:
+- category_id (PK)
+- name
+- parent_category_id (FK → categories.category_id)
+
+Why it’s spicy:
+Self-referencing hierarchy → great OLAP practice.
+
+Stories:
+- Revenue by parent category
+- Dispute rate by category
+
+
+🛍 4️⃣ LISTINGS
+------------------------------------------------------------
+Table: listings
+
+What it represents:
+Products created by vendors.
+
+Columns:
+- listing_id (PK)
+- vendor_id (FK → users.user_id)
+- category_id (FK → categories.category_id)
+- base_price
+- currency
+- stock_quantity
+- status
+
+Important concept:
+This is the current state of a product.
+Orders store price_at_purchase to freeze history.
+
+Stories:
+- Price changes vs order volume
+- High views, low conversion listings
+- Vendors with 90% of listings removed
+
+
+🧾 5️⃣ ORDERS
+------------------------------------------------------------
+Table: orders
+
+What it represents:
+Each purchase attempt.
+
+Columns:
+- order_id (PK)
+- buyer_id (FK → users.user_id)
+- vendor_id (FK → users.user_id)
+- order_status
+- total_amount
+- currency
+- created_at
+- completed_at
+
+Core transactional table in OLTP.
+
+Stories:
+- Vendor revenue spikes
+- Orders stuck in pending
+- Dispute rate by vendor
+- Order lifecycle duration
+
+
+📦 6️⃣ ORDER_ITEMS
+------------------------------------------------------------
+Table: order_items
+
+What it represents:
+Line-level breakdown of orders.
+
+Columns:
+- order_item_id (PK)
+- order_id (FK → orders.order_id)
+- listing_id (FK → listings.listing_id)
+- quantity
+- price_at_purchase
+
+Why it's important:
+Historical snapshot. Price stored here so future price changes
+don’t affect old orders.
+
+Stories:
+- Average basket size
+- High-quantity suspicious orders
+- Inflation analysis
+
+
+💳 7️⃣ PAYMENTS
+------------------------------------------------------------
+Table: payments
+
+What it represents:
+Payment attempts for an order.
+
+Columns:
+- payment_id (PK)
+- order_id (FK → orders.order_id)
+- buyer_id (FK → users.user_id)
+- amount
+- payment_method
+- created_at
+- confirmed_at
+
+Key concept:
+Late confirmations → late-arriving data simulation.
+
+Stories:
+- Payment delays
+- Payment method risk analysis
+- Unconfirmed transactions
+
+
+💰 8️⃣ WALLETS
+------------------------------------------------------------
+Table: wallets
+
+Each user has one wallet.
+
+Columns:
+- wallet_id (PK)
+- user_id (FK → users.user_id)
+- currency
+
+
+📒 9️⃣ WALLET_TRANSACTIONS (LEDGER)
+------------------------------------------------------------
+Table: wallet_transactions
+
+Each row = money movement.
+
+Columns:
+- transaction_id (PK)
+- wallet_id (FK → wallets.wallet_id)
+- order_id (FK → orders.order_id, nullable)
+- transaction_type
+- amount
+- created_at
+
+Types:
+- deposit
+- escrow_hold
+- escrow_release
+- refund
+
+Concept:
+Balance = SUM(amount)
+No stored balance. Derived only.
+
+Stories:
+- Refund-heavy users
+- Vendor payouts over time
+- Ledger reconciliation
+- Fraud detection
+
+
+🏦 10️⃣ ESCROWS
+------------------------------------------------------------
+Table: escrows
+
+Money held until order resolution.
+
+Columns:
+- escrow_id (PK)
+- order_id (FK → orders.order_id)
+- held_amount
+- release_status
+- held_at
+- released_at
+
+Stories:
+- Escrow duration
+- Orders never released
+- Vendor exit-scam pattern
+
+
+🚚 11️⃣ SHIPMENTS
+------------------------------------------------------------
+Table: shipments
+
+Physical delivery simulation.
+
+Columns:
+- shipment_id (PK)
+- order_id (FK → orders.order_id)
+- origin_region
+- destination_region
+- shipped_at
+- delivered_at
+- delivery_status
+
+Stories:
+- Delivery delays
+- Lost shipments
+- Region reliability
+
+
+📍 12️⃣ DELIVERY_EVENTS
+------------------------------------------------------------
+Table: delivery_events
+
+Event history of shipment lifecycle.
+
+Columns:
+- event_id (PK)
+- shipment_id (FK → shipments.shipment_id)
+- event_type
+- event_time
+
+Why it's useful:
+Time-series modeling. Stage transitions.
+
+
+⭐ 13️⃣ REVIEWS
+------------------------------------------------------------
+Table: reviews
+
+Feedback after order completion.
+
+Columns:
+- review_id (PK)
+- order_id (FK → orders.order_id)
+- reviewer_id (FK → users.user_id)
+- reviewed_user_id (FK → users.user_id)
+- rating
+- created_at
+
+Stories:
+- Rating drop before ban
+- High revenue but low rating vendors
+- Rating vs dispute rate
+
+
+📊 14️⃣ REPUTATION_SNAPSHOTS
+------------------------------------------------------------
+Table: reputation_snapshots
+
+Historical reputation states.
+
+Columns:
+- snapshot_id (PK)
+- user_id (FK → users.user_id)
+- avg_rating
+- total_reviews
+- calculated_at
+
+Becomes SCD2 dimension in OLAP.
+
+Stories:
+- Reputation collapse over time
+- Trust trajectory vs revenue
+
+
+⚠️ 15️⃣ RISK_SCORES
+------------------------------------------------------------
+Table: risk_scores
+
+Platform risk scoring over time.
+
+Columns:
+- risk_id (PK)
+- user_id (FK → users.user_id)
+- risk_score
+- risk_level
+- calculated_at
+
+Stories:
+- Risk spike before fraud
+- High risk but high revenue users
+
+
+🚨 16️⃣ FRAUD_FLAGS
+------------------------------------------------------------
+Table: fraud_flags
+
+Polymorphic association.
+
+Columns:
+- flag_id (PK)
+- entity_type (user / order / listing)
+- entity_id
+- flag_reason
+- flagged_at
+- resolved_flag
+
+Stories:
+- Which listings are repeatedly flagged?
+- Are flagged vendors more likely to be banned?
+
+
+============================================================
+🔥 SYSTEM FLOW (HIGH-LEVEL LIFECYCLE)
+============================================================
+
+1. User registers
+2. Vendor creates listing
+3. Buyer places order
+4. Payment created
+5. Escrow hold
+6. Shipment created
+7. Delivery events logged
+8. Escrow released OR refund issued
+9. Review created
+10. Reputation snapshot updated
+11. Risk recalculated
+
+
+============================================================
+🧠 WHAT YOU'RE PRACTICING
+============================================================
+
+- 3NF modeling
+- Transaction history modeling
+- Ledger-based accounting
+- Event-driven architecture
+- Slowly changing state
+- Polymorphic associations
+- Time-based analytics
+- Derived metrics

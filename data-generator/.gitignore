@@ -1,0 +1,9 @@
+venv
+.env
+
+# RAW DATASETS
+small
+feather
+light
+medium
+large

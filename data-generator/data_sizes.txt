@@ -1,0 +1,31 @@
+# SMALL
+num_users = 2000
+pct_vendors = 20
+num_categories = 8
+num_listings = 6000
+num_orders = 40000
+num_reviews = 28000
+
+# LIGHT
+num_users = 50000
+pct_vendors = 20
+num_categories = 12
+num_listings = 200000
+num_orders = 4000000
+num_reviews = 2500000
+
+# MEDIUM
+num_users = 100000
+pct_vendors = 20
+num_categories = 12
+num_listings = 400000
+num_orders = 8000000
+num_reviews = 5000000
+
+# LARGE (laughably massive)
+num_users = 10000000
+pct_vendors = 20
+num_categories = 20
+num_listings = 50000000
+num_orders = 2000000000
+num_reviews = 1400000000

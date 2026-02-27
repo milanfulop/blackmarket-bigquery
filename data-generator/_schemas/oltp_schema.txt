@@ -1,0 +1,128 @@
+categories.csv (dim)
+- category_id
+- name
+- parent_category_id
+
+delivery_events.csv
+- event_id
+- shipment_id
+- event_type
+- event_time
+
+escrows.csv
+- escrow_id
+- order_id
+- held_amount
+- release_status
+- held_at
+- released_at
+
+fraud_flags.csv
+- flag_id
+- entity_type
+- entity_id
+- flag_reason
+- flagged_at
+- resolved_flag
+
+listings.csv
+- listing_id
+- vendor_id
+- category_id
+- title
+- description
+- base_price
+- currency
+- stock_quantity
+- created_at
+- status
+
+order_items.csv
+- order_item_id
+- order_id
+- listing_id
+- quantity
+- price_at_purchase
+
+orders.csv
+- order_id
+- buyer_id
+- vendor_id
+- order_status
+- total_amount
+- currency
+- created_at
+- completed_at
+
+payments.csv
+- payment_id
+- order_id
+- buyer_id
+- amount
+- currency
+- payment_method
+- created_at
+- confirmed_at
+
+reputation_snapshots.csv
+- snapshot_id
+- user_id
+- avg_rating
+- total_reviews
+- calculated_at
+
+reviews.csv
+- review_id
+- order_id
+- reviewer_id
+- reviewed_user_id
+- rating
+- review_text
+- created_at
+
+risk_scores.csv
+- risk_id
+- user_id
+- risk_score
+- risk_level
+- calculated_at
+
+shipments.csv
+- shipment_id
+- order_id
+- origin_region
+- destination_region
+- estimated_delivery_days
+- shipped_at
+- delivered_at
+- delivery_status
+
+user_sessions.csv
+- session_id
+- user_id
+- ip_address
+- device_type
+- login_at
+- logout_at
+
+users.csv (dim)
+- user_id
+- username
+- email
+- role
+- created_at
+- status
+
+wallet_transactions.csv
+- transaction_id
+- wallet_id
+- order_id
+- transaction_type
+- amount
+- created_at
+
+wallets.csv
+- wallet_id
+- user_id
+- currency
+- created_at
