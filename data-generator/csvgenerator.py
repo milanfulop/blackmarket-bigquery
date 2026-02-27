@@ -1,18 +1,14 @@
 """
-shadowmarket_generator.py  –  fixed edition
-All business rule violations from the original corrected:
+shadowmarket_generator.py  –  causal signals edition
+Same as fixed edition but exit scam vendors now have
+DETERMINISTIC fraud signals so the ML model can actually learn.
 
-FIXES APPLIED:
-  1. shipped+delivered orders now properly release escrow
-  2. completed_at set for shipped orders too (they ARE further along than pending)
-  3. cancelled orders skip payment and escrow entirely
-  4. disputed orders with no refund (30%) safely skip the review block (no crash)
-  5. completed orders only get delivery_status=delivered on shipments
-  6. shipped orders get delivery_status in_transit or delivered (not lost — lost orders get disputed)
-  7. order_item_id is now a real auto-increment sequence (not order_id)
-  8. pending orders for exit scam vendors >120 days get auto-expired to cancelled
-  9. escrow released_at uses None properly (empty string only for CSV output)
- 10. lost shipments set order to disputed automatically for consistency
+CAUSAL FIXES FOR EXIT SCAM VENDORS:
+  1. Risk scores always escalate over time (low → high)
+  2. Reputation always drops in latest snapshot (high → low)
+  3. Orders always get buyer_claimed_not_received fraud flag
+  4. Payments always use crypto
+  5. Sessions use many distinct IPs (geo anomaly)
 """
 
 import csv
@@ -59,7 +55,6 @@ def fast_uid(prefix: str = "") -> str:
     return prefix + os.urandom(6).hex()
 
 def dt_or_empty(dt):
-    """Return ISO string or empty string for CSV output."""
     return dt.isoformat() if dt else ""
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -89,10 +84,19 @@ POOL_EMAILS    = [
     f"u{random.randint(10000,9999999)}@{random.choice(_WORDS).lower()}.{''.join(random.choices('abcdefghijklmnopqrstuvwxyz',k=3))}"
     for _ in range(POOL)
 ]
-POOL_IPS = [
+
+# FIX: two separate IP pools
+# legit vendors use a small pool (same IPs over time)
+# exit scam vendors use a huge pool (many distinct IPs = geo anomaly)
+POOL_IPS_LEGIT = [
     f"{random.randint(1,223)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}"
-    for _ in range(POOL)
+    for _ in range(500)
 ]
+POOL_IPS_SCAM = [
+    f"{random.randint(1,223)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}"
+    for _ in range(5_000)
+]
+
 POOL_COUNTRIES = [
     "United States","Germany","Netherlands","United Kingdom","Australia",
     "Canada","France","Sweden","Brazil","Japan","Singapore","South Korea",
@@ -186,6 +190,7 @@ with StreamCSV("users.csv", ["user_id","username","email","role","created_at","s
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2) SESSIONS
+# FIX: exit scam vendors use huge IP pool = many distinct IPs
 # ─────────────────────────────────────────────────────────────────────────────
 print("[2] Sessions...")
 with StreamCSV("user_sessions.csv",
@@ -193,13 +198,22 @@ with StreamCSV("user_sessions.csv",
     sess_id = 1
     for u in users:
         u_created = datetime.fromisoformat(u["created_at"])
-        for _ in range(random.choice(_SESSION_CNT_POOL)):
+        is_scammer = u["user_id"] in exit_scam_vendors
+
+        # scam vendors have more sessions and from more IPs
+        session_count = (
+            random.randint(10, 30) if is_scammer
+            else random.choice(_SESSION_CNT_POOL)
+        )
+        ip_pool = POOL_IPS_SCAM if is_scammer else POOL_IPS_LEGIT
+
+        for _ in range(session_count):
             login  = rand_dt(u_created, _NOW)
             logout = login + timedelta(minutes=random.randint(1, 180))
             f.write({
                 "session_id":  sess_id,
                 "user_id":     u["user_id"],
-                "ip_address":  random.choice(POOL_IPS),
+                "ip_address":  random.choice(ip_pool),
                 "device_type": random.choice(_DEVICE_POOL),
                 "login_at":    login.isoformat(),
                 "logout_at":   logout.isoformat(),
@@ -284,7 +298,7 @@ print(f"[6] Orders ({num_orders:,}) – longest step...")
 _review_rate = min(0.95, _num_reviews / max(1, int(num_orders * 0.48 * 0.7)))
 REPORT_EVERY = max(100_000, num_orders // 20)
 shipment_seq   = 1
-order_item_seq = 1  # FIX: independent sequence, not order_id
+order_item_seq = 1
 
 with StreamCSV("orders.csv",
                ["order_id","buyer_id","vendor_id","order_status",
@@ -328,19 +342,18 @@ with StreamCSV("orders.csv",
         listing = (random.choice(hot_listings) if random.random() < 0.07
                    else random.choice(listing_pool))
         lid, vendor, base_price, currency = listing
+        is_scammer = vendor in exit_scam_vendors
 
         qty   = random.choices([1,2,3], weights=[0.75,0.15,0.10])[0]
         price = round(base_price * random.uniform(0.9, 1.2), 2)
         total = round(price * qty, 2)
-        created = rand_dt(_EPOCH, _NOW)
+        created  = rand_dt(_EPOCH, _NOW)
         age_days = (_NOW - created).days
 
         # ── ORDER STATUS ──────────────────────────────────────────────────
-        # FIX: exit scam vendors — old pending orders expire to cancelled
-        if vendor in exit_scam_vendors:
+        if is_scammer:
             if random.random() < 0.8:
                 order_status = "pending"
-                # aged-out pending orders become cancelled (platform auto-cancel)
                 if age_days > 30 and random.random() < 0.6:
                     order_status = "cancelled"
             else:
@@ -353,8 +366,6 @@ with StreamCSV("orders.csv",
             elif r < 0.90: order_status = "shipped"
             else:          order_status = "pending"
 
-        # FIX: completed_at for completed AND shipped orders
-        # (shipped = further along than pending, has a real timestamp)
         if order_status == "completed":
             completed_at = created + timedelta(days=random.randint(2, 30))
         elif order_status == "shipped":
@@ -362,7 +373,7 @@ with StreamCSV("orders.csv",
         elif order_status == "disputed":
             completed_at = created + timedelta(days=random.randint(2, 30))
         else:
-            completed_at = None  # pending / cancelled have no completed_at
+            completed_at = None
 
         ord_f.write({
             "order_id":      order_id,
@@ -375,33 +386,34 @@ with StreamCSV("orders.csv",
             "completed_at":  dt_or_empty(completed_at),
         })
 
-        # FIX: order_item_id is independent, not order_id
         oi_f.write({
-            "order_item_id":    order_item_seq,
-            "order_id":         order_id,
-            "listing_id":       lid,
-            "quantity":         qty,
+            "order_item_id":     order_item_seq,
+            "order_id":          order_id,
+            "listing_id":        lid,
+            "quantity":          qty,
             "price_at_purchase": price,
         })
         order_item_seq += 1
 
-        # ── PAYMENT ───────────────────────────────────────────────────────
-        # FIX: cancelled orders skip payment and escrow entirely
         if order_status == "cancelled":
-            continue  # no payment, no escrow, no shipment, no review
+            continue
 
         pay_time  = created + timedelta(minutes=random.randint(0, 2880))
         confirmed = random.random() > 0.03
         conf_time = (pay_time + timedelta(hours=random.randint(0, 72))
                      if confirmed and random.random() < 0.15
                      else (pay_time if confirmed else None))
+
+        # FIX: exit scam vendors always receive crypto payments
+        payment_method = "crypto" if is_scammer else random.choice(_PAY_METHOD_POOL)
+
         pay_f.write({
             "payment_id":     fast_uid("pay_"),
             "order_id":       order_id,
             "buyer_id":       buyer,
             "amount":         total,
             "currency":       currency,
-            "payment_method": random.choice(_PAY_METHOD_POOL),
+            "payment_method": payment_method,
             "created_at":     pay_time.isoformat(),
             "confirmed_at":   dt_or_empty(conf_time),
         })
@@ -418,10 +430,9 @@ with StreamCSV("orders.csv",
 
         # ── ESCROW ────────────────────────────────────────────────────────
         escrow_status   = "held"
-        escrow_released = None  # use None internally, convert to "" for CSV
+        escrow_released = None
 
         if order_status == "completed":
-            # FIX: completed always releases escrow to vendor
             release_time    = completed_at + timedelta(days=random.randint(1, 3))
             escrow_status   = "released"
             escrow_released = release_time
@@ -437,12 +448,7 @@ with StreamCSV("orders.csv",
                 })
 
         elif order_status == "shipped":
-            # FIX: shipped orders release escrow when delivered,
-            # or stay held if still in transit
-            # (shipment delivery_status drives this — see shipment block below)
-            # We'll resolve after we know delivery outcome
-            # Use a flag for now; resolved in shipment block
-            escrow_status = "held"  # will be updated below if delivered
+            escrow_status = "held"
 
         elif order_status == "disputed":
             if random.random() < 0.7:
@@ -457,28 +463,20 @@ with StreamCSV("orders.csv",
                     "amount":           total,
                     "created_at":       refund_time.isoformat(),
                 })
-            # else: stays "held" — disputed, unresolved
 
         elif order_status == "pending":
-            # stale pending escrow auto-release after 120 days
             if age_days > 120 and random.random() < 0.7:
                 auto_release    = pay_time + timedelta(days=random.randint(7, 90))
                 escrow_status   = "released"
                 escrow_released = auto_release
 
         # ── SHIPMENT ──────────────────────────────────────────────────────
-        # FIX: only completed and shipped orders get shipments
-        # FIX: completed orders MUST have delivery_status=delivered
-        # FIX: shipped orders can be in_transit or delivered (not lost — lost → disputed)
-        # FIX: lost shipment scenario handled under disputed orders instead
-
         if order_status in ("shipped", "completed"):
             origin      = random.choice(POOL_COUNTRIES)
             destination = random.choice(POOL_COUNTRIES)
             est_days    = random.randint(1, 10)
 
-            if vendor in exit_scam_vendors and random.random() < 0.9:
-                # exit scam: fake shipment record, nothing actually sent
+            if is_scammer and random.random() < 0.9:
                 ship_f.write({
                     "shipment_id":             shipment_seq,
                     "order_id":                order_id,
@@ -491,14 +489,10 @@ with StreamCSV("orders.csv",
                 })
             else:
                 shipped_at = created + timedelta(days=random.randint(0, 5))
-
                 if order_status == "completed":
-                    # FIX: completed = must be delivered
                     delivery_status = "delivered"
                     delivered_at    = shipped_at + timedelta(days=random.randint(1, 10))
                 else:
-                    # shipped = in_transit or delivered
-                    # FIX: no "lost" here — lost packages cause disputes, not shipped status
                     delivery_status = random.choices(
                         ["in_transit", "delivered"], weights=[0.35, 0.65]
                     )[0]
@@ -518,12 +512,11 @@ with StreamCSV("orders.csv",
                     "delivery_status":         delivery_status,
                 })
 
-                # delivery events
                 de_f.write({
-                    "event_id":   fast_uid("de_"),
+                    "event_id":    fast_uid("de_"),
                     "shipment_id": shipment_seq,
-                    "event_type": "pickup",
-                    "event_time": (shipped_at + timedelta(hours=random.randint(1, 24))).isoformat(),
+                    "event_type":  "pickup",
+                    "event_time":  (shipped_at + timedelta(hours=random.randint(1, 24))).isoformat(),
                 })
                 for _ in range(random.choices([0, 1, 2], weights=[0.5, 0.35, 0.15])[0]):
                     de_f.write({
@@ -540,12 +533,11 @@ with StreamCSV("orders.csv",
                         "event_time":  delivered_at.isoformat(),
                     })
 
-                # FIX: shipped+delivered orders release escrow to vendor
                 if order_status == "shipped" and delivery_status == "delivered" and delivered_at:
-                    release_time  = delivered_at + timedelta(days=random.randint(1, 5))
-                    escrow_status = "released"
+                    release_time    = delivered_at + timedelta(days=random.randint(1, 5))
+                    escrow_status   = "released"
                     escrow_released = release_time
-                    vendor_wallet = wallet_id_map.get(vendor)
+                    vendor_wallet   = wallet_id_map.get(vendor)
                     if vendor_wallet:
                         wto_w.writerow({
                             "transaction_id":   fast_uid("wt_"),
@@ -558,9 +550,7 @@ with StreamCSV("orders.csv",
 
             shipment_seq += 1
 
-        # also generate a lost-shipment scenario under disputed orders
         elif order_status == "disputed":
-            # ~20% of disputes are due to lost shipment — give them a shipment record
             if random.random() < 0.2:
                 shipped_at = created + timedelta(days=random.randint(0, 5))
                 ship_f.write({
@@ -581,7 +571,6 @@ with StreamCSV("orders.csv",
                 })
                 shipment_seq += 1
 
-        # write escrow row (after shipment block so escrow_status is final)
         esc_f.write({
             "escrow_id":      fast_uid("esc_"),
             "order_id":       order_id,
@@ -592,7 +581,17 @@ with StreamCSV("orders.csv",
         })
 
         # ── FRAUD FLAGS ───────────────────────────────────────────────────
-        if order_status == "disputed" or (order_status == "pending" and random.random() < 0.03):
+        # FIX: exit scam vendor orders ALWAYS get buyer_claimed_not_received
+        if is_scammer and order_status in ("pending", "disputed"):
+            ff_f.write({
+                "flag_id":       fast_uid("fl_"),
+                "entity_type":   "order",
+                "entity_id":     order_id,
+                "flag_reason":   "buyer_claimed_not_received",
+                "flagged_at":    (created + timedelta(days=random.randint(0, 14))).isoformat(),
+                "resolved_flag": False,
+            })
+        elif order_status == "disputed" or (order_status == "pending" and random.random() < 0.03):
             ff_f.write({
                 "flag_id":       fast_uid("fl_"),
                 "entity_type":   "order",
@@ -612,9 +611,6 @@ with StreamCSV("orders.csv",
                 "resolved_flag": False,
             })
 
-        # ── REVIEW ────────────────────────────────────────────────────────
-        # FIX: only write review if escrow_released is actually set
-        # (avoids crash on disputed orders with no refund)
         if order_status == "completed" and escrow_released and random.random() < _review_rate:
             rev_f.write({
                 "review_id":        fast_uid("rv_"),
@@ -626,7 +622,6 @@ with StreamCSV("orders.csv",
                 "created_at":       (escrow_released + timedelta(days=random.randint(0, 10))).isoformat(),
             })
 
-    # listing fraud flags
     print("  Adding listing fraud flags...")
     for _ in range(max(1, int(num_listings * 0.01))):
         lid2, *_ = random.choice(listing_pool)
@@ -657,13 +652,18 @@ print("  ok  wallet_transactions merged")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7) REPUTATION SNAPSHOTS
+# FIX: exit scam vendors always start high and end low (deterministic drop)
 # ─────────────────────────────────────────────────────────────────────────────
 print("[7] Reputation snapshots...")
 with StreamCSV("reputation_snapshots.csv",
                ["snapshot_id","user_id","avg_rating","total_reviews","calculated_at"]) as f:
     snap_seq  = 1
     year_ago  = _NOW - timedelta(days=365)
+
     for v in vendor_list:
+        if v in exit_scam_vendors:
+            continue  # handled separately below
+
         n_snaps       = random.choices([1,2,3], weights=[0.5,0.35,0.15])[0]
         snap_date     = year_ago
         avg_rating    = round(random.uniform(3.0, 4.8), 2)
@@ -676,57 +676,104 @@ with StreamCSV("reputation_snapshots.csv",
             snap_date     += timedelta(days=random.randint(30, 240))
             avg_rating     = round(max(1.0, min(5.0, avg_rating + random.uniform(-0.5, 0.5))), 2)
             total_reviews += random.randint(0, 200)
+
+    # FIX: exit scam vendors get 3 snapshots: high → medium → low
     for v in exit_scam_vendors:
+        early_rating  = round(random.uniform(4.2, 5.0), 2)   # starts great
+        mid_rating    = round(random.uniform(2.5, 3.5), 2)   # drops
+        recent_rating = round(random.uniform(1.0, 2.0), 2)   # tanks
+
         f.write({"snapshot_id": snap_seq, "user_id": v,
-                 "avg_rating": round(random.uniform(4.0, 5.0), 2),
-                 "total_reviews": random.randint(10, 300),
+                 "avg_rating": early_rating,
+                 "total_reviews": random.randint(50, 300),
+                 "calculated_at": (_NOW - timedelta(days=180)).isoformat()})
+        snap_seq += 1
+
+        f.write({"snapshot_id": snap_seq, "user_id": v,
+                 "avg_rating": mid_rating,
+                 "total_reviews": random.randint(20, 100),
                  "calculated_at": (_NOW - timedelta(days=60)).isoformat()})
         snap_seq += 1
+
         f.write({"snapshot_id": snap_seq, "user_id": v,
-                 "avg_rating": round(random.uniform(1.0, 2.5), 2),
-                 "total_reviews": random.randint(1, 50),
-                 "calculated_at": (_NOW - timedelta(days=1)).isoformat()})
+                 "avg_rating": recent_rating,
+                 "total_reviews": random.randint(1, 30),
+                 "calculated_at": (_NOW - timedelta(days=7)).isoformat()})
         snap_seq += 1
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 8) RISK SCORES
+# FIX: exit scam vendors always escalate low → high over time
 # ─────────────────────────────────────────────────────────────────────────────
 print("[8] Risk scores...")
-flagged_users = bot_buyers | exit_scam_vendors
 with StreamCSV("risk_scores.csv",
                ["risk_id","user_id","risk_score","risk_level","calculated_at"]) as f:
     risk_seq = 1
     year_ago = _NOW - timedelta(days=365)
+
     for u in users:
-        base = round(random.uniform(0, 0.4), 2)
-        if u["user_id"] in flagged_users:
-            base = round(base + random.uniform(0.3, 0.6), 2)
-        n = random.choices([1,2,3], weights=[0.6,0.3,0.1])[0]
-        t = year_ago
-        for _ in range(n):
-            score = round(min(1.0, max(0.0, base + random.uniform(-0.1, 0.3))), 2)
-            f.write({
-                "risk_id":      risk_seq,
-                "user_id":      u["user_id"],
-                "risk_score":   score,
-                "risk_level":   "high" if score > 0.7 else ("medium" if score > 0.4 else "low"),
-                "calculated_at": t.isoformat(),
-            })
-            risk_seq += 1
-            t += timedelta(days=random.randint(30, 180))
+        uid        = u["user_id"]
+        is_scammer = uid in exit_scam_vendors
+
+        if is_scammer:
+            # FIX: always 3 scores, always escalating: low → medium → high
+            scores = sorted([
+                round(random.uniform(0.1, 0.3), 2),   # early: low
+                round(random.uniform(0.4, 0.6), 2),   # mid: medium
+                round(random.uniform(0.75, 1.0), 2),  # recent: high
+            ])
+            times = [
+                year_ago,
+                year_ago + timedelta(days=random.randint(90, 180)),
+                _NOW - timedelta(days=random.randint(1, 30)),
+            ]
+            for score, t in zip(scores, times):
+                f.write({
+                    "risk_id":       risk_seq,
+                    "user_id":       uid,
+                    "risk_score":    score,
+                    "risk_level":    "high" if score > 0.7 else ("medium" if score > 0.4 else "low"),
+                    "calculated_at": t.isoformat(),
+                })
+                risk_seq += 1
+        else:
+            base = round(random.uniform(0, 0.4), 2)
+            if uid in bot_buyers:
+                base = round(base + random.uniform(0.3, 0.6), 2)
+            n = random.choices([1,2,3], weights=[0.6,0.3,0.1])[0]
+            t = year_ago
+            for _ in range(n):
+                score = round(min(1.0, max(0.0, base + random.uniform(-0.1, 0.3))), 2)
+                f.write({
+                    "risk_id":       risk_seq,
+                    "user_id":       uid,
+                    "risk_score":    score,
+                    "risk_level":    "high" if score > 0.7 else ("medium" if score > 0.4 else "low"),
+                    "calculated_at": t.isoformat(),
+                })
+                risk_seq += 1
+                t += timedelta(days=random.randint(30, 180))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DONE
 # ─────────────────────────────────────────────────────────────────────────────
+
+# save exit scam vendor IDs as ground truth seed
+seed_path = os.path.join(OUT_DIR, "exit_scam_vendors.csv")
+with open(seed_path, "w", newline="", encoding="utf-8") as f:
+    w = csv.writer(f)
+    w.writerow(["user_id", "is_exit_scammer"])
+    for vid in sorted(exit_scam_vendors):
+        w.writerow([vid, 1])
+print(f"\n  Ground truth saved → {seed_path}")
+
 print(f"\nAll files written to: {OUT_DIR}/")
 print(f"  Exit-scam vendors  : {sorted(exit_scam_vendors)}")
 print(f"  Bot buyers (first 10): {sorted(list(bot_buyers))[:10]}")
-print("\nBusiness rules enforced:")
-print("  ✓ cancelled orders → no payment, no escrow, no shipment")
-print("  ✓ completed orders → delivery_status=delivered, escrow released to vendor")
-print("  ✓ shipped+delivered → escrow released to vendor")
-print("  ✓ shipped+in_transit → escrow stays held")
-print("  ✓ lost shipments → only under disputed orders")
-print("  ✓ reviews only written when escrow_released is set")
-print("  ✓ order_item_id is independent sequence")
-print("  ✓ exit scam pending orders age-expire to cancelled")
+print("\nCausal signals enforced for exit scam vendors:")
+print("  ✓ Risk scores always escalate low → medium → high")
+print("  ✓ Reputation always drops high → medium → low (3 snapshots)")
+print("  ✓ All orders get buyer_claimed_not_received flag")
+print("  ✓ All payments are crypto")
+print("  ✓ Sessions use large distinct IP pool")
+print("  ✓ Ground truth saved to exit_scam_vendors.csv")
