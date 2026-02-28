@@ -1,5 +1,6 @@
 ## train.py
-use cache:              python train.py
+### use cache
+python train.py
 re-fetches from BQ:     python train.py --refresh
 
 ## predict.py

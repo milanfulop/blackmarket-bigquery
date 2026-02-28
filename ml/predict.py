@@ -42,7 +42,7 @@ FEATURES = [
 # ─────────────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description="Run exit scam prediction on vendor CSV")
 parser.add_argument("--input",     required=True,             help="Path to input CSV")
-parser.add_argument("--output",    default="./ml/predictions.csv", help="Path to output CSV")
+parser.add_argument("--output",    default="./result/predictions.csv", help="Path to output CSV")
 parser.add_argument("--threshold", type=float, default=0.5,   help="Scam probability threshold (default 0.5)")
 args = parser.parse_args()
 
