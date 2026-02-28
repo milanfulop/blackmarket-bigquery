@@ -1,0 +1,43 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- assert_raw_user_sessions.sqlx
+-- ─────────────────────────────────────────────────────────────────────────────
+config {
+  type: "assertion",
+  description: "Raw user sessions date validation"
+}
+
+-- login_at must not be null
+SELECT session_id
+FROM ${ref("raw_oltp", "user_sessions")}
+WHERE login_at IS NULL
+
+UNION ALL
+
+-- login_at must not be in the future
+SELECT session_id
+FROM ${ref("raw_oltp", "user_sessions")}
+WHERE CAST(login_at AS TIMESTAMP) > CURRENT_TIMESTAMP()
+
+UNION ALL
+
+-- logout_at must happen after login_at when set
+SELECT session_id
+FROM ${ref("raw_oltp", "user_sessions")}
+WHERE logout_at IS NOT NULL
+  AND CAST(logout_at AS TIMESTAMP) < CAST(login_at AS TIMESTAMP)
+
+UNION ALL
+
+-- logout_at must not be in the future
+SELECT session_id
+FROM ${ref("raw_oltp", "user_sessions")}
+WHERE logout_at IS NOT NULL
+  AND CAST(logout_at AS TIMESTAMP) > CURRENT_TIMESTAMP()
+
+UNION ALL
+
+-- login_at must not be before the user was created
+SELECT s.session_id
+FROM ${ref("raw_oltp", "user_sessions")} s
+JOIN ${ref("raw_oltp", "users")} u ON s.user_id = u.user_id
+WHERE CAST(s.login_at AS TIMESTAMP) < CAST(u.created_at AS TIMESTAMP)

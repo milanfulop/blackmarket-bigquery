@@ -1,0 +1,43 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- assert_raw_payments.sqlx
+-- ─────────────────────────────────────────────────────────────────────────────
+config {
+  type: "assertion",
+  description: "Raw payments date validation"
+}
+
+-- payment created_at must not be null
+SELECT payment_id
+FROM ${ref("raw_oltp", "payments")}
+WHERE created_at IS NULL
+
+UNION ALL
+
+-- payment created_at must not be in the future
+SELECT payment_id
+FROM ${ref("raw_oltp", "payments")}
+WHERE CAST(created_at AS TIMESTAMP) > CURRENT_TIMESTAMP()
+
+UNION ALL
+
+-- payment created_at must happen after the order was created
+SELECT p.payment_id
+FROM ${ref("raw_oltp", "payments")} p
+JOIN ${ref("raw_oltp", "orders")} o ON p.order_id = o.order_id
+WHERE CAST(p.created_at AS TIMESTAMP) < CAST(o.created_at AS TIMESTAMP)
+
+UNION ALL
+
+-- confirmed_at must happen after payment created_at when set
+SELECT payment_id
+FROM ${ref("raw_oltp", "payments")}
+WHERE confirmed_at IS NOT NULL
+  AND CAST(confirmed_at AS TIMESTAMP) < CAST(created_at AS TIMESTAMP)
+
+UNION ALL
+
+-- confirmed_at must not be in the future
+SELECT payment_id
+FROM ${ref("raw_oltp", "payments")}
+WHERE confirmed_at IS NOT NULL
+  AND CAST(confirmed_at AS TIMESTAMP) > CURRENT_TIMESTAMP()

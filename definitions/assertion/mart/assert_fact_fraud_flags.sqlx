@@ -1,0 +1,32 @@
+config {
+  type: "assertion",
+  description: "Every fraud flag entity_id must exist in the corresponding table"
+}
+
+-- entity_type = 'order' must exist in fct_orders
+SELECT ff.flag_id
+FROM ${ref("facts", "fact_fraud_flags")} ff
+LEFT JOIN ${ref("facts", "fact_orders")} o
+  ON CAST(ff.entity_id AS INT64) = o.order_id
+WHERE ff.entity_type = 'order'
+  AND o.order_id IS NULL
+
+UNION ALL
+
+-- entity_type = 'user' must exist in dim_user
+SELECT ff.flag_id
+FROM ${ref("facts", "fact_fraud_flags")} ff
+LEFT JOIN ${ref("dimensions", "dim_users")} u
+  ON CAST(ff.entity_id AS INT64) = u.user_id
+WHERE ff.entity_type = 'user'
+  AND u.user_id IS NULL
+
+-- UNION ALL
+
+-- entity_type = 'listing' must exist in listings
+-- SELECT ff.flag_id
+-- FROM ${ref("facts", "fact_fraud_flags")} ff
+-- LEFT JOIN ${ref("facts", "fct_listings")} l
+--   ON CAST(ff.entity_id AS INT64) = l.listing_id
+-- WHERE ff.entity_type = 'listing'
+--   AND l.listing_id IS NULL

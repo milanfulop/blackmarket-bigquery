@@ -1,0 +1,43 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- assert_raw_escrows.sqlx
+-- ─────────────────────────────────────────────────────────────────────────────
+config {
+  type: "assertion",
+  description: "Raw escrows date and status validation"
+}
+
+-- held_at must not be null
+SELECT escrow_id
+FROM ${ref("raw_oltp", "escrows")}
+WHERE held_at IS NULL
+
+UNION ALL
+
+-- held_at must not be in the future
+SELECT escrow_id
+FROM ${ref("raw_oltp", "escrows")}
+WHERE CAST(held_at AS TIMESTAMP) > CURRENT_TIMESTAMP()
+
+UNION ALL
+
+-- released_at must happen after held_at when set
+SELECT escrow_id
+FROM ${ref("raw_oltp", "escrows")}
+WHERE released_at IS NOT NULL
+  AND CAST(released_at AS TIMESTAMP) < CAST(held_at AS TIMESTAMP)
+
+UNION ALL
+
+-- released_at must not be null when release_status is released or refunded
+SELECT escrow_id
+FROM ${ref("raw_oltp", "escrows")}
+WHERE release_status IN ('released', 'refunded')
+  AND released_at IS NULL
+
+UNION ALL
+
+-- released_at must be null when release_status is held
+SELECT escrow_id
+FROM ${ref("raw_oltp", "escrows")}
+WHERE release_status = 'held'
+  AND released_at IS NOT NULL

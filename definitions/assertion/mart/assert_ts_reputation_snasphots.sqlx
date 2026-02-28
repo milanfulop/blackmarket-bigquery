@@ -1,0 +1,51 @@
+config {
+  type: "assertion",
+  description: "Reputation snapshots time series checks"
+}
+
+-- check 1: exactly one is_most_recent = true per user
+WITH most_recent_counts AS (
+  SELECT
+    user_id,
+    COUNTIF(is_most_recent = true) AS most_recent_count
+  FROM ${ref("time_series", "ts_reputation_snapshots")}
+  GROUP BY user_id
+)
+SELECT user_id
+FROM most_recent_counts
+WHERE most_recent_count != 1
+
+UNION ALL
+
+-- check 2: avg_rating must be between 1 and 5
+SELECT CAST(user_id AS STRING)
+FROM ${ref("time_series", "ts_reputation_snapshots")}
+WHERE avg_rating < 1 OR avg_rating > 5
+
+UNION ALL
+
+-- check 3: total_reviews must not be negative
+SELECT CAST(user_id AS STRING)
+FROM ${ref("time_series", "ts_reputation_snapshots")}
+WHERE total_reviews < 0
+
+UNION ALL
+
+-- check 4: calculated_at must not be in the future
+SELECT CAST(user_id AS STRING)
+FROM ${ref("time_series", "ts_reputation_snapshots")}
+WHERE calculated_at > CURRENT_TIMESTAMP()
+
+UNION ALL
+
+-- check 5: rating_change on first snapshot should be null
+-- (if it has a value, something went wrong with the LAG window)
+SELECT CAST(user_id AS STRING)
+FROM ${ref("time_series", "ts_reputation_snapshots")}
+WHERE is_most_recent = false
+  AND rating_change IS NULL
+  AND (
+    SELECT COUNT(*)
+    FROM ${ref("time_series", "ts_reputation_snapshots")} t2
+    WHERE t2.user_id = ts_reputation_snapshots.user_id
+  ) > 1

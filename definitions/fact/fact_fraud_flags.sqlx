@@ -17,6 +17,7 @@ config {
     days_open:    { description: "Days flag has been open, null if resolved" }
   }
 }
+-- TODO: partition by entity_type
 
 SELECT
   CAST(flag_id       AS STRING)    AS flag_id,

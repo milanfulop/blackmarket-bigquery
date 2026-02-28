@@ -1,0 +1,35 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- assert_raw_orders.sqlx
+-- ─────────────────────────────────────────────────────────────────────────────
+config {
+  type: "assertion",
+  description: "Raw orders date validation"
+}
+
+-- created_at must not be in the future
+SELECT order_id
+FROM ${ref("raw_oltp", "orders")}
+WHERE CAST(created_at AS TIMESTAMP) > CURRENT_TIMESTAMP()
+
+UNION ALL
+
+-- created_at must not be null
+SELECT order_id
+FROM ${ref("raw_oltp", "orders")}
+WHERE created_at IS NULL
+
+UNION ALL
+
+-- completed_at must be after created_at when set
+SELECT order_id
+FROM ${ref("raw_oltp", "orders")}
+WHERE completed_at IS NOT NULL
+  AND CAST(completed_at AS TIMESTAMP) < CAST(created_at AS TIMESTAMP)
+
+UNION ALL
+
+-- completed_at must not be in the future
+SELECT order_id
+FROM ${ref("raw_oltp", "orders")}
+WHERE completed_at IS NOT NULL
+  AND CAST(completed_at AS TIMESTAMP) > CURRENT_TIMESTAMP()
