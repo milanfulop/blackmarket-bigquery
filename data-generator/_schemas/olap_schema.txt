@@ -1,68 +1,89 @@
-reputation_snapshots (time series)
-- snapshot_id
-- user_id
-- avg_rating
-- total_reviews
-- calculated_at
-
-risk_scores (time series)
-- risk_id
-- user_id
-- risk_score
-- risk_level
-- calculated_at
-
 fraud_flags (fact)
-- flag_id
-- entity_type
-- entity_id
-- flag_reason
-- flagged_at
-- resolved_flag
+- flag_id          -- PK
+- entity_type      -- 'user' or 'order'
+- entity_id        -- FK → users_dim (entity_key) or degenerate dim (order_id)
+- flag_reason      -- 'buyer_claimed_not_received' / 'suspicious_activity' etc.
+- flagged_at       -- FK → date_dim
+- resolved_flag    -- boolean, true if flag has been resolved
 
-orders
-- order_id
-- buyer_id
-- vendor_id
-- order_status
-- total_amount
-- currency
-- created_at
-- completed_at
+orders (fact)
+- order_id         -- PK / degenerate dim on fact_payments and fact_escrows
+- buyer_id         -- FK → users_dim (role-playing: buyer)
+- vendor_id        -- FK → users_dim (role-playing: vendor)
+- order_status     -- 'pending' / 'completed' / 'disputed'
+- total_amount     -- raw amount in original currency
+- currency         -- 'USD' / 'BTC' / 'ETH'
+- created_at       -- FK → date_dim
+- completed_at     -- FK → date_dim
 
-payments
-- payment_id
-- order_id
-- buyer_id
-- amount
-- currency
-- usd_amount
-- payment_method
-- created_at
-- confirmed_at
+payments (fact)
+- payment_id       -- PK
+- order_id         -- degenerate dim (no arrow, carry-forward from fact_orders)
+- buyer_id         -- FK → users_dim
+- amount           -- raw amount in original currency
+- currency         -- 'USD' / 'BTC' / 'ETH'
+- usd_amount       -- normalized amount in USD
+- payment_method   -- 'crypto' / 'bank_transfer' / 'card'
+- created_at       -- FK → date_dim
+- confirmed_at     -- FK → date_dim
 
-escrows
-- escrow_id
-- order_id
-- held_amount
-- release_status
-- held_at
-- released_at
+escrows (fact)
+- escrow_id        -- PK
+- order_id         -- degenerate dim (no arrow, carry-forward from fact_orders)
+- held_amount      -- amount held in escrow
+- release_status   -- 'held' / 'released' / 'disputed'
+- held_at          -- FK → date_dim
+- released_at      -- FK → date_dim (nullable)
 
-user_sessions
-- session_id
-- user_id
-- ip_address
-- device_type
-- login_at
-- logout_at
+user_sessions (fact)
+- session_id       -- PK
+- user_id          -- FK → users_dim
+- ip_address       -- raw, used for distinct IP analysis
+- device_type      -- 'mobile' / 'desktop' / 'tablet'
+- login_at         -- FK → date_dim
+- logout_at        -- FK → date_dim (nullable, NULL if abandoned)
 
-users (dim)
-- user_id
-- username
-- email
-- role
-- created_at
-- status
+users_dim (SCD2)
+- user_key         -- surrogate PK (SCD2 row identifier)
+- user_id          -- natural key from source OLTP
+- username         -- username
+- email            -- nullable
+- role             -- 'buyer' / 'vendor' / 'dual'
+- created_at       -- account creation date, FK → date_dim
+- status           -- 'active' / 'suspended' / 'banned'
+- is_vendor        -- true if role is vendor or dual
+- is_buyer         -- true if role is buyer or dual
+- is_banned        -- true if status is banned
+- avg_rating       -- avg rating from reputation_snapshots at this point in time (SCD2)
+- total_reviews    -- total review count from reputation_snapshots (SCD2)
+- risk_score       -- risk score from risk_scores at this point in time (SCD2)
+- risk_level       -- 'low' / 'medium' / 'high' / 'critical' (SCD2)
+- valid_from       -- when this SCD2 row became active
+- valid_to         -- when this SCD2 row was superseded, NULL if current
+- is_current       -- true if this is the latest row for this user_id
 
 date_dim
+- date_id          -- PK, surrogate key e.g. 20240101
+- full_date        -- actual date value
+- year
+- quarter
+- quarter_label    -- e.g. 'Q1 2024'
+- month
+- month_name       -- e.g. 'January'
+- month_short      -- e.g. 'Jan'
+- year_month       -- e.g. '2024-01'
+- week_of_year
+- iso_week
+- day
+- day_of_week      -- 1=Sunday, 7=Saturday
+- day_name         -- e.g. 'Monday'
+- day_short        -- e.g. 'Mon'
+- day_of_year
+- is_weekend
+- is_weekday
+- is_month_start
+- is_month_end
+- is_year_start
+- days_ago
+- months_ago
+- weeks_ago
