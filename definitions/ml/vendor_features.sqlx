@@ -61,45 +61,44 @@ vendor_flags AS (
   GROUP BY o.vendor_id
 ),
 
--- latest and 2nd latest reputation snapshot per vendor
+-- latest and 2nd latest reputation snapshot per vendor, sourced from dim_users SCD2
 rep_ranked AS (
   SELECT
     user_id,
     avg_rating,
     total_reviews,
-    calculated_at,
-    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY calculated_at DESC) AS rn
-  FROM ${ref("time_series", "ts_reputation_snapshots")}
+    valid_from                                                        AS calculated_at,
+    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY valid_from DESC) AS rn
+  FROM ${ref("dimensions", "dim_users")}
+  WHERE avg_rating IS NOT NULL
 ),
 
 vendor_reputation AS (
   SELECT
     user_id,
-    -- avg of latest and 2nd latest
     AVG(CASE WHEN rn IN (1, 2) THEN avg_rating END)                 AS avg_rating,
     MAX(CASE WHEN rn = 1 THEN total_reviews END)                    AS total_reviews,
-    -- trajectory: avg(latest, 2nd latest) - earliest
     AVG(CASE WHEN rn IN (1, 2) THEN avg_rating END)
       - MIN(avg_rating)                                             AS rating_trajectory
   FROM rep_ranked
   GROUP BY user_id
 ),
 
--- latest and 2nd latest risk score per vendor
+-- latest and 2nd latest risk score per vendor, sourced from dim_users SCD2
 risk_ranked AS (
   SELECT
     user_id,
     risk_score,
-    calculated_at,
-    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY calculated_at DESC) AS rn
-  FROM ${ref("time_series", "ts_risk_scores")}
+    valid_from                                                        AS calculated_at,
+    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY valid_from DESC) AS rn
+  FROM ${ref("dimensions", "dim_users")}
+  WHERE risk_score IS NOT NULL
 ),
 
 vendor_risk AS (
   SELECT
     user_id,
     AVG(risk_score)                                                 AS avg_risk_score,
-    -- trajectory: avg(latest, 2nd latest) - earliest
     AVG(CASE WHEN rn IN (1, 2) THEN risk_score END)
       - MIN(risk_score)                                             AS risk_score_trajectory
   FROM risk_ranked
@@ -155,4 +154,5 @@ LEFT JOIN vendor_reputation vr  ON u.user_id = vr.user_id
 LEFT JOIN vendor_risk       vrk ON u.user_id = vrk.user_id
 LEFT JOIN vendor_sessions   vs  ON u.user_id = vs.user_id
 
-WHERE u.is_vendor = true
+WHERE u.is_vendor = TRUE
+  AND u.is_current = TRUE

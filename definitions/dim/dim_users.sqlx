@@ -1,35 +1,146 @@
 config {
   type: "table",
   schema: "dimensions",
-  description: "User dimension table",
+  description: "User dimension table with SCD2 for reputation and risk score history",
   assertions: {
     nonNull: ["user_id", "username", "role", "created_at", "status"],
-    uniqueKey: ["user_id"]
+    uniqueKey: ["user_key"]
   },
   columns: {
-    user_id:    { description: "Primary key" },
-    username:   { description: "Username, non nullable" },
-    email:      { description: "Email, nullable" },
-    role:       { description: "buyer / vendor / dual" },
-    created_at: { description: "Foreign key to dim_date" },
-    status:     { description: "active / suspended / banned" },
-    is_vendor:  { description: "True if role is vendor or dual" },
-    is_buyer:   { description: "True if role is buyer or dual" },
-    is_banned:  { description: "True if status is banned" },
+    user_key:             { description: "Surrogate PK (SCD2 row identifier)" },
+    user_id:              { description: "Natural key from source OLTP" },
+    username:             { description: "Username" },
+    email:                { description: "Email, nullable" },
+    role:                 { description: "buyer / vendor / dual" },
+    created_at:           { description: "Account creation date" },
+    status:               { description: "active / suspended / banned" },
+    is_vendor:            { description: "True if role is vendor or dual" },
+    is_buyer:             { description: "True if role is buyer or dual" },
+    is_banned:            { description: "True if status is banned" },
+    avg_rating:           { description: "Avg rating from reputation_snapshots at this point in time" },
+    total_reviews:        { description: "Total review count from reputation_snapshots" },
+    risk_score:           { description: "Risk score from risk_scores at this point in time" },
+    risk_level:           { description: "low / medium / high / critical" },
+    valid_from:           { description: "When this SCD2 row became active" },
+    valid_to:             { description: "When this SCD2 row was superseded. NULL if current" },
+    is_current:           { description: "True if this is the latest row for this user_id" },
   }
 }
 
+WITH users AS (
+  SELECT
+    CAST(user_id    AS INT64)  AS user_id,
+    CAST(username   AS STRING) AS username,
+    CAST(email      AS STRING) AS email,
+    CAST(role       AS STRING) AS role,
+    CAST(created_at AS DATE)   AS created_at,
+    CAST(status     AS STRING) AS status
+  FROM ${ref("raw_oltp", "users")}
+),
+
+-- latest reputation snapshot per user per calculated_at
+reputation AS (
+  SELECT
+    CAST(user_id       AS INT64)   AS user_id,
+    CAST(avg_rating    AS FLOAT64) AS avg_rating,
+    CAST(total_reviews AS INT64)   AS total_reviews,
+    CAST(calculated_at AS DATE)    AS calculated_at
+  FROM ${ref("raw_oltp", "reputation_snapshots")}
+),
+
+-- latest risk score per user per calculated_at
+risk AS (
+  SELECT
+    CAST(user_id    AS INT64)   AS user_id,
+    CAST(risk_score AS FLOAT64) AS risk_score,
+    CAST(risk_level AS STRING)  AS risk_level,
+    CAST(calculated_at AS DATE) AS calculated_at
+  FROM ${ref("raw_oltp", "risk_scores")}
+),
+
+-- union all change events per user into one timeline
+-- each distinct date where ANYTHING changed becomes a new SCD2 row
+change_events AS (
+  SELECT user_id, calculated_at AS event_date FROM reputation
+  UNION DISTINCT
+  SELECT user_id, calculated_at AS event_date FROM risk
+  UNION DISTINCT
+    SELECT user_id, created_at AS event_date FROM users
+),
+
+-- for each change event, find the most recent snapshot values
+-- using LAST_VALUE to carry forward the latest known value
+versioned AS (
+  SELECT
+    u.user_id,
+    u.username,
+    u.email,
+    u.role,
+    u.created_at,
+    u.status,
+    ce.event_date                                         AS valid_from,
+
+    -- carry forward latest reputation at or before this event
+    LAST_VALUE(r.avg_rating IGNORE NULLS) OVER (
+      PARTITION BY u.user_id
+      ORDER BY ce.event_date
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    )                                                     AS avg_rating,
+
+    LAST_VALUE(r.total_reviews IGNORE NULLS) OVER (
+      PARTITION BY u.user_id
+      ORDER BY ce.event_date
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    )                                                     AS total_reviews,
+
+    LAST_VALUE(rs.risk_score IGNORE NULLS) OVER (
+      PARTITION BY u.user_id
+      ORDER BY ce.event_date
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    )                                                     AS risk_score,
+
+    LAST_VALUE(rs.risk_level IGNORE NULLS) OVER (
+      PARTITION BY u.user_id
+      ORDER BY ce.event_date
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    )                                                     AS risk_level
+
+  FROM users u
+  JOIN change_events ce ON u.user_id = ce.user_id
+  LEFT JOIN reputation r
+    ON r.user_id = u.user_id
+    AND r.calculated_at = ce.event_date
+  LEFT JOIN risk rs
+    ON rs.user_id = u.user_id
+    AND rs.calculated_at = ce.event_date
+)
+
 SELECT
-  CAST(user_id   AS INT64)  AS user_id,
-  CAST(username  AS STRING) AS username,
-  CAST(email     AS STRING) AS email,
-  CAST(role      AS STRING) AS role,
-  CAST(created_at AS DATE)  AS created_at,
-  CAST(status    AS STRING) AS status,
-
-  -- convenience flags (saves repeating CASE logic downstream)
-  role IN ('vendor', 'dual')  AS is_vendor,
-  role IN ('buyer', 'dual')   AS is_buyer,
-  status = 'banned'           AS is_banned,
-
-FROM ${ref("raw_oltp", "users")}
+    FARM_FINGERPRINT(
+      CONCAT(CAST(user_id AS STRING), '_', CAST(valid_from AS STRING))
+    )                           AS user_key,
+    user_id,
+    username,
+    email,
+    role,
+    created_at,
+    status,
+    role IN ('vendor', 'dual')  AS is_vendor,
+    role IN ('buyer',  'dual')  AS is_buyer,
+    status = 'banned'           AS is_banned,
+    avg_rating,
+    total_reviews,
+    risk_score,
+    risk_level,
+    valid_from,
+    LEAD(valid_from) OVER (
+      PARTITION BY user_id ORDER BY valid_from
+    )                           AS valid_to,
+    CASE
+      WHEN LEAD(valid_from) OVER (
+        PARTITION BY user_id ORDER BY valid_from
+      ) IS NULL THEN TRUE
+      ELSE FALSE
+    END                         AS is_current
+FROM versioned
+ORDER BY user_id, valid_from

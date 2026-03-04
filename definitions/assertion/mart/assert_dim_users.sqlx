@@ -1,0 +1,73 @@
+-- definitions/assertions/dim_users_scd2.sqlx
+
+config {
+  type: "assertion",
+  description: "SCD2 integrity checks for dim_users",
+  dependencies: ["dim_users"]
+}
+
+WITH
+
+-- 1. every user_id must have exactly one is_current = true row
+current_check AS (
+  SELECT
+    user_id,
+    COUNTIF(is_current = TRUE)  AS current_count
+  FROM ${ref("dimensions", "dim_users")}
+  GROUP BY user_id
+  HAVING current_count != 1
+),
+
+-- 2. valid_from must never be null
+valid_from_check AS (
+  SELECT user_id, valid_from
+  FROM ${ref("dimensions", "dim_users")}
+  WHERE valid_from IS NULL
+),
+
+-- 3. valid_to must be after valid_from when it exists
+valid_to_check AS (
+  SELECT user_id, valid_from, valid_to
+  FROM ${ref("dimensions", "dim_users")}
+  WHERE valid_to IS NOT NULL
+    AND valid_to <= valid_from
+),
+
+-- 4. no gaps: valid_to must equal next row's valid_from
+gap_check AS (
+  SELECT
+    user_id,
+    valid_from,
+    valid_to,
+    LEAD(valid_from) OVER (
+      PARTITION BY user_id ORDER BY valid_from
+    ) AS next_valid_from
+  FROM ${ref("dimensions", "dim_users")}
+  QUALIFY
+    valid_to IS NOT NULL
+    AND valid_to != LEAD(valid_from) OVER (
+      PARTITION BY user_id ORDER BY valid_from
+    )
+),
+
+-- 5. is_current must never be null
+is_current_check AS (
+  SELECT user_id, valid_from
+  FROM ${ref("dimensions", "dim_users")}
+  WHERE is_current IS NULL
+),
+
+-- union all failures — assertion passes only if this returns 0 rows
+all_failures AS (
+  SELECT user_id, 'missing_current_row'     AS failure_reason FROM current_check
+  UNION ALL
+  SELECT user_id, 'null_valid_from'          AS failure_reason FROM valid_from_check
+  UNION ALL
+  SELECT user_id, 'invalid_valid_to'         AS failure_reason FROM valid_to_check
+  UNION ALL
+  SELECT user_id, 'gap_in_scd2_timeline'     AS failure_reason FROM gap_check
+  UNION ALL
+  SELECT user_id, 'null_is_current'          AS failure_reason FROM is_current_check
+)
+
+SELECT * FROM all_failures
