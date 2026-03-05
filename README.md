@@ -4,8 +4,9 @@
 This project simulates a black-market marketplace and builds a data pipeline to detect scam vendors using synthetic transaction data.
 
 ## Overview
+<img width="435" height="281" alt="architecture" src="https://github.com/user-attachments/assets/e765eb83-f4be-4eec-bbce-87ccb33daefc" />
 
-Architecture
+### Table of Contents
 
 1. [Data Generator](#data-generator)
 2. [OLTP data to BigQuery](#oltp-data-to-bigquery)
